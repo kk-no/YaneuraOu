@@ -145,8 +145,8 @@ BLAS = OPENBLAS
 # BLAS = BLIS
 
 # NNUE評価関数を実行ファイルに内蔵する。 `eval/nnue/embedded_nnue.cpp` が別途必要。
-EVAL_EMBEDDING = OFF
-# EVAL_EMBEDDING = ON
+# EVAL_EMBEDDING = OFF
+EVAL_EMBEDDING = ON
 
 # === implementations ===
 
