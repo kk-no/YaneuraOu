@@ -1,0 +1,18 @@
+#!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+WASI_SDK_PATH=/usr/local/wasi-sdk-25
+CORES=$(sysctl -n hw.ncpu)
+WASI_CLANG="${WASI_SDK_PATH}/bin/clang++"
+
+mkdir -p "$REPO_ROOT/build/wasi"
+cd "$REPO_ROOT/source"
+
+make clean
+make -j$CORES tournament \
+  COMPILER="${WASI_CLANG}" \
+  TARGET_CPU=WASM \
+  YANEURAOU_EDITION=YANEURAOU_ENGINE_NNUE \
+  TARGET=../build/wasi/yaneuraou.wasm \
+  CPPFLAGS="--target=wasm32-wasi-threads -pthread -matomics -mbulk-memory -ftls-model=local-exec -fno-exceptions -fno-rtti -DUSE_WASI -D__wasm32__ -DYANEURAOU_ENGINE_NNUE -DNO_EXCEPTIONS" \
+  LDFLAGS="-Wl,--export-memory -Wl,--shared-memory -Wl,--initial-memory=268435456 -Wl,--max-memory=4294967296 -Wl,--export-dynamic -Wl,--export=__heap_base -Wl,--export=__data_end"

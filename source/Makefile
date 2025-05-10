@@ -102,6 +102,7 @@ DEBUG = OFF
 #COMPILER = g++
 COMPILER = clang++
 #COMPILER = em++
+#COMPILER = wasi
 
 # Python
 # ※ NNUEの未知なarchitectureの時にarchitecture headerを動的に生成するのに用いる。
@@ -173,71 +174,29 @@ ifeq ($(DEBUG),OFF)
 endif
 
 # clang用にCPPFLAGSなどを変更
-ifneq (,$(findstring clang++,$(COMPILER)))
-
-	# stdlib
-	# CPPFLAGS += -stdlib=libstdc++
-
-	# C++17のfilesystem
-	# LDFLAGS += -lstdc++fs
-
-	# 関数の引数が関数本体で使われていないときに警告出るのうざすぎるので抑制。
+ifneq (,$(findstring wasi,$(COMPILER)))
+	EM_EXPORT_NAME=YaneuraOu
+	EM_INITIAL_MEMORY_SIZE=$(shell if [ $(MATERIAL_LEVEL) -ge 5 ]; then echo 385875968; else echo 138412032; fi)
 	CPPFLAGS += -Wno-unused-parameter
-
-	# static リンクを行う際に __cxa_guard_acquire __cxa_guard_release の生成を抑止
-	#   undefined reference to `__imp___cxa_guard_acquire'
-	#   undefined reference to `__imp___cxa_guard_release'
-	# static 変数を初期化したかを pthread_mutex_t でロックを取って確認し、
-	# 最初の実行なら初期化するスレッドセーフなコードを生成するためのもの。
-	# → 本当に消してしまっても大丈夫か？
-	WCPPFLAGS += -fno-threadsafe-statics
-
-	# note : clang++で-flto指定時に、LDFLAGSに -fuse-ld=lld を指定しないと
-	#      MSYS2、Ubuntu 24.04のclang-18でのlinkに失敗する。
-	#   ⇨ このオプションはそれ以前のclangでもつけて問題ないのでclangならば必ずつけるようにする。
-	#   ⇨ gccでコンパイルする時にこのオプションをつけるとエラーになるので、gccの時はつけてはいけない。
-	# note : macOSでは、デフォルトではclangのlinkerではなくld64を用いるので、この指定をするとエラーになる。(いまのところ)
-	#   ⇨ よってTARGET_CPUにAPPLEの文字が入っている場合は、これを付与してはならない。
-	ifeq (,$(findstring APPLE,$(TARGET_CPU)))
-		LDFLAGS       += -fuse-ld=lld
-	endif
-
-else
-	ifneq (,$(findstring g++,$(COMPILER)))
-		# mingw g++ で AVX512 向けビルドを行おうとするとエラーになる問題の回避
-		# https://stackoverflow.com/questions/43152633/invalid-register-for-seh-savexmm-in-cygwin
-		# https://gcc.gnu.org/bugzilla/show_bug.cgi?id=65782
-		WCPPFLAGS += -fno-asynchronous-unwind-tables
-
-		# C++17のfilesystem
-		# LDFLAGS += -lstdc++fs
-	endif
-	ifneq (,$(findstring em++,$(COMPILER)))
-		EM_EXPORT_NAME=YaneuraOu
-		EM_INITIAL_MEMORY_SIZE=$(shell if [ $(MATERIAL_LEVEL) -ge 5 ]; then echo 385875968; else echo 138412032; fi)
-		CPPFLAGS += -Wno-unused-parameter
-		CPPFLAGS += -DUSE_WASM_SIMD -msimd128
-		CPPFLAGS += -DUSE_SSE42 -msse4.2
-		CPPFLAGS += -pthread
-		CPPFLAGS += -s STRICT=1
-		LDFLAGS += --pre-js wasm_pre.js
-		# LDFLAGS += --preload-file eval/nn.bin
-		LDFLAGS += -s MODULARIZE=1 -s EXPORT_NAME="$(EM_EXPORT_NAME)" -s ENVIRONMENT=web,worker,node
-		LDFLAGS += -s PTHREAD_POOL_SIZE=32
-		# -s PTHREAD_POOL_SIZE_STRICT=32
-		LDFLAGS += -s FILESYSTEM=1 -s EXIT_RUNTIME=0 -s "EXPORTED_RUNTIME_METHODS=['FS','ccall']"
-		LDFLAGS += -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=$(EM_INITIAL_MEMORY_SIZE) -s MAXIMUM_MEMORY=4294967296
-		LDFLAGS += -s STACK_SIZE=67108864
-		# LDFLAGS += -s PROXY_TO_PTHREAD
-		# LDFLAGS += -s ALLOW_UNIMPLEMENTED_SYSCALLS
-		# LDFLAGS += -s ASSERTIONS
-		LDFLAGS += -s --closure 1
-	endif
+	# CPPFLAGS += -DUSE_WASM_SIMD -msimd128
+	CPPFLAGS += -DUSE_SSE42 -msse4.2
+	CPPFLAGS += --target=wasm32-wasi-threads
+	CPPFLAGS += -pthread
+	CPPFLAGS += -mbulk-memory
+	CPPFLAGS += -matomics
+	CPPFLAGS += -ftls-model=local-exec
+	LDFLAGS += -Wl,--import-memory
+	LDFLAGS += -Wl,--shared-memory
+	LDFLAGS += -Wl,--max-memory=4294967296
+	LDFLAGS += -Wl,--export-dynamic
+	LDFLAGS += -Wl,--export=__heap_base
+	LDFLAGS += -Wl,--export=__data_end
+	LDFLAGS += -Wl,-z,stack-size=67108864
 endif
 
 TARGETDIR = .
-ifneq (,$(findstring em++,$(COMPILER)))
-	TARGET = $(TARGETDIR)/yaneuraou.js
+ifneq (,$(findstring wasi,$(COMPILER)))
+	TARGET = $(TARGETDIR)/yaneuraou.wasm
 else
 	ifeq ($(OS),Windows_NT)
 		CPPFLAGS += $(WCPPFLAGS)
@@ -277,28 +236,28 @@ endif
 # clangでOPENMPを有効にしてビルドする方法については、解説.txtを参照のこと。
 
 
-ifneq (,$(findstring g++,$(COMPILER)))
-	OPENMP   = -fopenmp
-	OPENMP_LDFLAGS =
-endif
-ifneq (,$(findstring clang++,$(COMPILER)))
-		ifeq ($(MSYSTEM),MINGW64)
-		# MSYS2 MINGW64 env
-		# libgompを指定した場合、ビルドは通るがOpenMPは無効化される？
-		OPENMP = -fopenmp=libgomp
-		OPENMP_LDFLAGS =
-	else
-		ifneq (,$(findstring w64-mingw32,$(COMPILER)))
-			# Ubuntu mingw-w64 clang++ env (experimental)
-			OPENMP = -fopenmp=libgomp
-			OPENMP_LDFLAGS =
-		else
-			# Other (normal clang++/libomp env)
-			OPENMP = -fopenmp
-			OPENMP_LDFLAGS = -lomp
-		endif
-	endif
-endif
+# ifneq (,$(findstring g++,$(COMPILER)))
+# 	OPENMP   = -fopenmp
+# 	OPENMP_LDFLAGS =
+# endif
+# ifneq (,$(findstring clang++,$(COMPILER)))
+# 		ifeq ($(MSYSTEM),MINGW64)
+# 		# MSYS2 MINGW64 env
+# 		# libgompを指定した場合、ビルドは通るがOpenMPは無効化される？
+# 		OPENMP = -fopenmp=libgomp
+# 		OPENMP_LDFLAGS =
+# 	else
+# 		ifneq (,$(findstring w64-mingw32,$(COMPILER)))
+# 			# Ubuntu mingw-w64 clang++ env (experimental)
+# 			OPENMP = -fopenmp=libgomp
+# 			OPENMP_LDFLAGS =
+# 		else
+# 			# Other (normal clang++/libomp env)
+# 			OPENMP = -fopenmp
+# 			OPENMP_LDFLAGS = -lomp
+# 		endif
+# 	endif
+# endif
 
 # NNUE評価関数 学習バイナリ用 OpenBLAS
 ifneq (,$(findstring YANEURAOU_ENGINE_NNUE,$(YANEURAOU_EDITION)))
